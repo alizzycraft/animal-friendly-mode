@@ -1,0 +1,189 @@
+buildscript {
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'fabric-loom:fabric-loom.gradle.plugin:1.13-SNAPSHOT'
+    }
+}
+
+plugins {
+    id 'fabric-loom' version '1.13-SNAPSHOT'
+    id 'java'
+}
+
+version = project.version
+group = project.group
+
+base {
+    archivesName = 'animal-friendly-mode'
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'Fabric'
+        url = 'https://maven.fabricmc.net/'
+    }
+}
+
+// Task to download Tapestry JAR from GitHub releases
+task downloadTapestry {
+    description = 'Downloads Tapestry JAR from GitHub releases'
+    group = 'build setup'
+    
+    def tapestryDir = file('libs')
+    def tapestryJar = file("libs/tapestry-${project.tapestry_version}.jar")
+    def tapestryUrl = "https://github.com/alizzycraft/tapestry/releases/download/v${project.tapestry_version}/tapestry-${project.tapestry_version}.jar"
+    
+    outputs.file(tapestryJar)
+    
+    doLast {
+        if (!tapestryJar.exists()) {
+            println "Downloading Tapestry ${project.tapestry_version} from GitHub..."
+            tapestryDir.mkdirs()
+            
+            new URL(tapestryUrl).withInputStream { input ->
+                tapestryJar.withOutputStream { output ->
+                    output << input
+                }
+            }
+            
+            println "Tapestry JAR downloaded successfully to ${tapestryJar}"
+        } else {
+            println "Tapestry JAR already exists at ${tapestryJar}"
+        }
+    }
+}
+
+dependencies {
+    // Fabric
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    
+    // Tapestry dependency - downloaded from GitHub releases, for compilation only, not bundled
+    compileOnly files("libs/tapestry-${project.tapestry_version}.jar")
+    
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testImplementation 'org.mockito:mockito-core:5.6.0'
+}
+
+// Ensure Tapestry is downloaded before compilation
+tasks.withType(JavaCompile).configureEach {
+    dependsOn downloadTapestry
+}
+
+processResources {
+    inputs.property "version", project.version
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+}
+
+java {
+    withSourcesJar()
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Task to compile TypeScript using global TypeScript compiler
+task compileTypeScript {
+    description = 'Compiles TypeScript to JavaScript using global TypeScript compiler'
+    group = 'build'
+    dependsOn downloadTapestry
+    
+    inputs.dir('src')
+    outputs.dir('dist')
+    
+    doLast {
+        // Try to find tsc in common locations
+        def tscCommand = null
+        
+        // Try common npm global locations
+        def npmGlobal = System.getProperty('user.home') + '/AppData/Roaming/npm/tsc.cmd'
+        def programFiles = System.getenv('ProgramFiles') + '/nodejs/tsc.cmd'
+        def programFilesX86 = System.getenv('ProgramFiles(x86)') + '/nodejs/tsc.cmd'
+        
+        if (file(npmGlobal).exists()) {
+            tscCommand = npmGlobal
+        } else if (file(programFiles).exists()) {
+            tscCommand = programFiles
+        } else if (file(programFilesX86).exists()) {
+            tscCommand = programFilesX86
+        } else {
+            // Fallback to just 'tsc' (should be in PATH)
+            tscCommand = 'tsc'
+        }
+        
+        println "Using TypeScript compiler: ${tscCommand}"
+        
+        def result = exec {
+            commandLine tscCommand
+            workingDir projectDir
+            ignoreExitValue = true
+        }
+        
+        if (result.exitValue != 0) {
+            throw new Exception("TypeScript compilation failed with exit code ${result.exitValue}")
+        }
+    }
+}
+
+// Task to create a complete mod package
+task packageMod {
+    description = 'Creates a complete mod package with TypeScript output'
+    group = 'build'
+    dependsOn compileTypeScript
+    
+    // Declare outputs so Gradle can track when task needs to run
+    outputs.dir('build/resources/main/assets/tapestry/mods')
+    
+    doLast {
+        // Copy TypeScript output to resources for inclusion
+        copy {
+            from 'dist/index.js'
+            into 'build/resources/main/assets/tapestry/mods'
+            rename { 'animal-friendly-mode.js' }
+        }
+    }
+}
+
+// Configure jar to create proper Fabric mod JAR
+jar {
+    dependsOn packageMod
+    inputs.files(packageMod.outputs.files)
+    from 'build/resources/main'
+    archiveClassifier = ''
+    manifest {
+        attributes(
+            'Main-Class': 'com.animalfriendlymode.AnimalFriendlyModeExtension'
+        )
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Configure remapJar for Fabric Loom - let it handle dependencies automatically
+remapJar {
+    dependsOn packageMod
+}
+
+// Make the default build task include TypeScript compilation
+build.dependsOn packageMod

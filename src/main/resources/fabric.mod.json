@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "animal-friendly-mode",
+  "version": "1.0.0",
+  "name": "Animal Friendly Mode",
+  "description": "A mod to make Minecraft more animal-friendly",
+  "authors": ["alizzycraft"],
+  "license": "AGPL-3.0",
+  "environment": "*",
+  "depends": {
+    "fabricloader": ">=0.15.11",
+    "minecraft": "~1.21.11",
+    "java": ">=21"
+  }
+}
